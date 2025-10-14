@@ -22,6 +22,8 @@ with st.sidebar:
     OPENAI_API_KEY = st.text_input("OpenAI API Key", type="password")
     GEMINI_API_KEY = st.text_input("Gemini API Key", type="password")
     CEREBRAS_API_KEY = st.text_input("Cerebras API Key", type="password")
+    OPENAI_MODEL = st.selectbox("OpenAI model", ["gpt-4o-mini", "gpt-4o", "o4-mini", "o3-mini"], index=1)
+    GEMINI_MODEL = st.selectbox("Gemini model", ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"], index=0)
     SUPABASE_URL = st.text_input("SUPABASE_URL", type="password")
     SUPABASE_KEY = st.text_input("SUPABASE_KEY", type="password")
     SUPABASE_TABLE = st.text_input("SUPABASE_TABLE_Name", value="postmortem_results")
@@ -69,14 +71,8 @@ with st.expander("Supabase setup and table schema", expanded=False):
 # ===========================
 SYSTEM_PROMPT = st.text_area(
     "🧩 System Prompt",
-    value="""You are an expert software auditor, code reviewer, and performance engineer.
-Your role is to perform a complete postmortem analysis of the given code.
-## Instruction
-  - You must think like a professional auditor, focusing on correctness, performance, and security.
-  - Your analysis should identify potential issues, weaknesses, and improvement areas related to efficiency, reliability, maintainability, and safety.
-  - Do not use bullet points, tables, markdown formatting, or emojis.
-  - Write the report entirely in well-structured, coherent paragraphs, maintaining a formal and technical tone.""",
-    height=250,
+    value="Focus on correctness, performance, and security. Provide a concise, structured audit.",
+    height=120,
 )
 
 # Allow user to customize the per-file user prompt template
@@ -216,8 +212,8 @@ if csv_file and zip_file:
             from langchain_cerebras.chat_models import ChatCerebras
             from langchain.schema import SystemMessage, HumanMessage
 
-            llm_openai = ChatOpenAI(model="gpt-4o", temperature=0.2, openai_api_key=OPENAI_API_KEY)
-            llm_gemini = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.2, api_key=GEMINI_API_KEY)
+            llm_openai = ChatOpenAI(model=OPENAI_MODEL, temperature=0.2, openai_api_key=OPENAI_API_KEY)
+            llm_gemini = ChatGoogleGenerativeAI(model=GEMINI_MODEL, temperature=0.2, api_key=GEMINI_API_KEY)
             if(CEREBRAS_API_KEY):
                 llm_cerebras = ChatCerebras(model="llama3.1-70b", api_key=CEREBRAS_API_KEY, temperature=0.2)
             with debug_box:
