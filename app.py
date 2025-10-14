@@ -21,6 +21,13 @@ with st.sidebar:
     OPENAI_API_KEY = st.text_input("OpenAI API Key", type="password")
     GEMINI_API_KEY = st.text_input("Gemini API Key", type="password")
     CEREBRAS_API_KEY = st.text_input("Cerebras API Key", type="password")
+    st.header("💾 Output")
+    AUTOSAVE_DIR_INPUT = st.text_input("Autosave folder", value=str(Path.cwd() / "results"))
+    try:
+        AUTOSAVE_DIR = Path(AUTOSAVE_DIR_INPUT)
+        AUTOSAVE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        AUTOSAVE_DIR = Path.cwd()
 
 # ===========================
 # FILE INPUTS
@@ -83,10 +90,20 @@ def read_text_safe(p: Path) -> str:
         with open(p, "rb") as f:
             return f.read().decode("utf-8", errors="ignore")
 
-def resolve_path(raw_value: t.Any, project_root: Path) -> Path:
+def resolve_path(raw_value: t.Any, project_root: Path, csv_file_name: str) -> Path:
+    """
+    Returns a path like: project_root / csv_file_name_without_ext / raw_value
+    """
+    # Normalize raw_value
     s = str(raw_value).strip().replace("\\", "/")
     s = s.lstrip("./").lstrip("/")
-    return (project_root / s).resolve()
+
+    # Remove .csv from CSV file name
+    csv_name_no_ext = Path(csv_file_name).stem
+
+    # Build final path
+    final_path = (project_root / csv_name_no_ext / s).resolve()
+    return final_path
 
 def _strip_wrapper_quotes(s: str) -> str:
     if s is None:
@@ -104,25 +121,66 @@ def _strip_wrapper_quotes(s: str) -> str:
 if csv_file and zip_file:
     if st.button("🚀 Run Postmortem Analysis"):
         with st.spinner("Extracting and analyzing... please wait"):
+            debug_box = st.expander("Debug logs", expanded=True)
+            with debug_box:
+                st.write({
+                    "csv_uploaded": bool(csv_file),
+                    "zip_uploaded": bool(zip_file),
+                    "csv_uploaded_size": getattr(csv_file, "size", None),
+                    "zip_uploaded_size": getattr(zip_file, "size", None),
+                })
             temp_dir = tempfile.mkdtemp()
             zip_path = os.path.join(temp_dir, "project.zip")
             csv_path = os.path.join(temp_dir, "input.csv")
+            # Precompute output CSV path for periodic autosaves
+            csv_out = os.path.join(temp_dir, "postmortem_results.csv")
+            # Persistent autosave file in user-selected folder
+            persistent_csv_out = str(Path(AUTOSAVE_DIR) / "postmortem_results.csv")
 
             with open(zip_path, "wb") as f:
                 f.write(zip_file.read())
             with open(csv_path, "wb") as f:
                 f.write(csv_file.read())
+            with debug_box:
+                st.write({
+                    "temp_dir": temp_dir,
+                    "zip_path": zip_path,
+                    "csv_path": csv_path,
+                    "zip_path_size": os.path.getsize(zip_path),
+                    "csv_path_size": os.path.getsize(csv_path),
+                })
 
             DEST = Path(temp_dir) / "project"
             with zipfile.ZipFile(zip_path, "r") as z:
                 z.extractall(DEST)
+            # Print unzip destination to terminal
+            print(f"[DEBUG] Unzipped project to: {DEST}")
+            try:
+                extracted_files = [str(p) for p in DEST.rglob("*") if p.is_file()]
+            except Exception:
+                extracted_files = []
+            with debug_box:
+                st.write({
+                    "extracted_files_count": len(extracted_files),
+                    "extracted_sample": extracted_files[:5],
+                })
 
-            df_in = pd.read_csv(csv_path)
-            st.write("✅ CSV Loaded:", df_in.shape)
-            st.dataframe(df_in.head(3))
+            try:
+                df_in = pd.read_csv(csv_path)
+                df_in=df_in.iloc[:2,:]
+                st.write("✅ CSV Loaded:", df_in.shape)
+                st.dataframe(df_in.head(3))
+                with debug_box:
+                    st.write({"csv_rows": len(df_in), "csv_cols": list(df_in.columns)})
+            except Exception as e:
+                with debug_box:
+                    st.write({"csv_read_error": f"{type(e).__name__}: {e}"})
+                raise
 
             col = detect_path_column(df_in)
             st.info(f"Using CSV path column: `{col}`")
+            with debug_box:
+                st.write({"detected_path_column": col})
 
             from langchain_openai import ChatOpenAI
             from langchain_google_genai import ChatGoogleGenerativeAI
@@ -133,6 +191,18 @@ if csv_file and zip_file:
             llm_gemini = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.2, api_key=GEMINI_API_KEY)
             if(CEREBRAS_API_KEY):
                 llm_cerebras = ChatCerebras(model="llama3.1-70b", api_key=CEREBRAS_API_KEY, temperature=0.2)
+            with debug_box:
+                st.write({
+                    "api_keys": {
+                        "openai_provided": bool(OPENAI_API_KEY),
+                        "gemini_provided": bool(GEMINI_API_KEY),
+                        "cerebras_provided": bool(CEREBRAS_API_KEY),
+                    },
+                    "models": [
+                        "gpt-4o",
+                        "gemini-2.0-flash",
+                    ] + (["llama3.1-70b"] if CEREBRAS_API_KEY else []),
+                })
 
             results = []
 
@@ -141,10 +211,22 @@ if csv_file and zip_file:
             log_box = st.expander("Row creation logs", expanded=True)
 
             for i, row in df_in.iterrows():
+                
                 raw_path = row[col]
-                file_path = resolve_path(raw_path, DEST)
+                file_path = resolve_path(raw_path, DEST,csv_file.name)
+                # Print current CSV row to terminal
+                print(file_path)
                 found = file_path.exists() and file_path.suffix.lower() == ".java"
                 if not found:
+                    with debug_box:
+                        st.write({
+                            "skip_row": i,
+                            "csv_path_value": raw_path,
+                            "resolved_path": str(file_path),
+                            "reason": "file not found or not .java",
+                            "exists": file_path.exists(),
+                            "suffix": file_path.suffix.lower(),
+                        })
                     continue
 
                 file_text = read_text_safe(file_path)
@@ -152,6 +234,14 @@ if csv_file and zip_file:
                     user_prompt = USER_PROMPT_TEMPLATE.replace("{code}", file_text)
                 else:
                     user_prompt = f"{USER_PROMPT_TEMPLATE}\n\n{file_text}"
+                with debug_box:
+                    st.write({
+                        "row_index": i,
+                        "resolved_path": str(file_path),
+                        "file_text_length": len(file_text),
+                        "prompt_uses_placeholder": "{code}" in USER_PROMPT_TEMPLATE,
+                        "user_prompt_length": len(user_prompt),
+                    })
 
                 def call_model(fn, llm, sys, usr):
                     try:
@@ -161,6 +251,8 @@ if csv_file and zip_file:
                         return f"[ERROR] {type(e).__name__}: {e}"
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    with debug_box:
+                        st.write({"calling_models_for_row": i})
                     fut_openai = executor.submit(call_model, "openai", llm_openai, SYSTEM_PROMPT, user_prompt)
                     fut_gemini = executor.submit(call_model, "gemini", llm_gemini, SYSTEM_PROMPT, user_prompt)
                     if(CEREBRAS_API_KEY):
@@ -173,6 +265,8 @@ if csv_file and zip_file:
                             cerebras_res = fut_cerebras.result(timeout=60)
                     except Exception as e:
                         openai_res = gemini_res = cerebras_res = f"[TIMEOUT] {e}"
+                        with debug_box:
+                            st.write({"model_timeout": f"{type(e).__name__}: {e}"})
                 if(CEREBRAS_API_KEY):
                     results.append({
                         "csv_row": i,
@@ -198,17 +292,68 @@ if csv_file and zip_file:
                         "csv_path_value": raw_path,
                         "resolved_path": str(file_path),
                     })
+                with debug_box:
+                    st.write({
+                        "row_completed": i,
+                        "results_count": len(results),
+                        "openai_len": None if openai_res is None else len(str(openai_res)),
+                        "gemini_len": None if gemini_res is None else len(str(gemini_res)),
+                        **({"cerebras_len": (None if not CEREBRAS_API_KEY else (None if cerebras_res is None else len(str(cerebras_res))))}),
+                    })
 
                 progress.progress((i + 1) / total)
+
+                # Periodic autosave every 10 completed results
+                if len(results) > 0 and len(results) % 10 == 0:
+                    try:
+                        pd.DataFrame(results).to_csv(csv_out, index=False)
+                        print(f"[DEBUG] Autosaved results CSV after {len(results)} rows -> {csv_out}")
+                        # Also save to persistent location
+                        pd.DataFrame(results).to_csv(persistent_csv_out, index=False)
+                        print(f"[DEBUG] Autosaved persistent CSV after {len(results)} rows -> {persistent_csv_out}")
+                        with debug_box:
+                            st.write({
+                                "autosave_rows": len(results),
+                                "autosave_path": csv_out,
+                                "autosave_size": os.path.getsize(csv_out) if os.path.exists(csv_out) else None,
+                                "persistent_autosave_path": persistent_csv_out,
+                                "persistent_autosave_size": os.path.getsize(persistent_csv_out) if os.path.exists(persistent_csv_out) else None,
+                            })
+                    except Exception as e:
+                        print(f"[DEBUG] Autosave error after {len(results)} rows: {type(e).__name__}: {e}")
+                        with debug_box:
+                            st.write({
+                                "autosave_error": f"{type(e).__name__}: {e}",
+                                "autosave_rows": len(results),
+                            })
+                
 
             df_out = pd.DataFrame(results)
             st.success("✅ Analysis complete!")
             st.dataframe(df_out.head())
+            with debug_box:
+                st.write({"output_rows": len(df_out), "output_cols": list(df_out.columns)})
 
-            csv_out = os.path.join(temp_dir, "postmortem_results.csv")
             df_out.to_csv(csv_out, index=False)
+            # Final save to persistent location as well
+            try:
+                df_out.to_csv(persistent_csv_out, index=False)
+                with debug_box:
+                    st.write({
+                        "final_persistent_save_path": persistent_csv_out,
+                        "final_persistent_save_size": os.path.getsize(persistent_csv_out) if os.path.exists(persistent_csv_out) else None,
+                    })
+                print(f"[DEBUG] Final persistent CSV saved -> {persistent_csv_out}")
+            except Exception as e:
+                with debug_box:
+                    st.write({"final_persistent_save_error": f"{type(e).__name__}: {e}"})
             with open(csv_out, "rb") as f:
                 st.download_button("📥 Download Results CSV", data=f, file_name="postmortem_results.csv")
+            with debug_box:
+                try:
+                    st.write({"csv_out_path": csv_out, "csv_out_size": os.path.getsize(csv_out)})
+                except Exception as e:
+                    st.write({"csv_out_stat_error": f"{type(e).__name__}: {e}"})
 
 else:
     st.warning("Please provide all API keys and upload both CSV and ZIP files to proceed.")
