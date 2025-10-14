@@ -167,7 +167,7 @@ if csv_file and zip_file:
 
             try:
                 df_in = pd.read_csv(csv_path)
-                df_in=df_in.iloc[:2,:]
+                # df_in=df_in.iloc[:2,:]
                 st.write("✅ CSV Loaded:", df_in.shape)
                 st.dataframe(df_in.head(3))
                 with debug_box:
