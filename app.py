@@ -4,6 +4,7 @@ import zipfile, os, tempfile, textwrap, traceback
 from pathlib import Path
 import concurrent.futures
 import typing as t
+from supabase import create_client
 
 # ===========================
 # PAGE CONFIG
@@ -21,6 +22,9 @@ with st.sidebar:
     OPENAI_API_KEY = st.text_input("OpenAI API Key", type="password")
     GEMINI_API_KEY = st.text_input("Gemini API Key", type="password")
     CEREBRAS_API_KEY = st.text_input("Cerebras API Key", type="password")
+    SUPABASE_URL = st.text_input("SUPABASE_URL", type="password")
+    SUPABASE_KEY = st.text_input("SUPABASE_KEY", type="password")
+    SUPABASE_TABLE = st.text_input("SUPABASE_TABLE_Name", value="postmortem_results")
     st.header("💾 Output")
     AUTOSAVE_DIR_INPUT = st.text_input("Autosave folder", value=str(Path.cwd() / "results"))
     try:
@@ -36,6 +40,29 @@ st.subheader("📁 Upload Files")
 
 csv_file = st.file_uploader("Upload CSV file", type=["csv"])
 zip_file = st.file_uploader("Upload ZIP file (project source code)", type=["zip"])
+
+# Supabase setup instructions and helper
+with st.expander("Supabase setup and table schema", expanded=False):
+    st.markdown(
+        """
+        1. In Supabase project, go to Settings → API and copy Project URL and Service Role Key.
+        2. Paste them in the sidebar inputs SUPABASE_URL and SUPABASE_KEY. Table defaults to `postmortem_results`.
+        3. Create the table if it doesn't exist using SQL:
+
+        ```sql
+        create table if not exists postmortem_results (
+          id bigserial primary key,
+          created_at timestamptz default now(),
+          csv_row bigint,
+          csv_path_value text,
+          resolved_path text,
+          openai text,
+          gemini text,
+          cerebras text
+        );
+        ```
+        """
+    )
 
 # ===========================
 # SYSTEM PROMPT
@@ -65,6 +92,8 @@ USER_PROMPT_TEMPLATE = st.text_area(
 # ===========================
 # HELPER FUNCTIONS
 # ===========================
+
+
 def detect_path_column(df: pd.DataFrame) -> str:
     candidates = []
     for col in df.columns:
@@ -205,6 +234,15 @@ if csv_file and zip_file:
                 })
 
             results = []
+            supabase_client = None
+            if SUPABASE_URL and SUPABASE_KEY:
+                try:
+                    supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+                    with debug_box:
+                        st.write({"supabase_client_initialized": True, "table": SUPABASE_TABLE})
+                except Exception as e:
+                    with debug_box:
+                        st.write({"supabase_init_error": f"{type(e).__name__}: {e}"})
 
             progress = st.progress(0)
             total = len(df_in)
@@ -284,6 +322,27 @@ if csv_file and zip_file:
                         "openai": openai_res,
                         "gemini": gemini_res,
                     })
+
+                # Insert into Supabase per row if configured
+                if supabase_client is not None and SUPABASE_TABLE:
+                    try:
+                        payload = {
+                            "csv_row": int(i),
+                            "csv_path_value": str(raw_path),
+                            "resolved_path": str(file_path),
+                            "openai": str(openai_res) if openai_res is not None else None,
+                            "gemini": str(gemini_res) if gemini_res is not None else None,
+                        }
+                        if 'cerebras_res' in locals():
+                            payload["cerebras"] = str(cerebras_res) if cerebras_res is not None else None
+                        _ = supabase_client.table(SUPABASE_TABLE).insert(payload).execute()
+                        print(f"[DEBUG] Supabase row inserted: {payload['csv_row']}")
+                        with debug_box:
+                            st.write({"supabase_insert_ok_row": int(i)})
+                    except Exception as e:
+                        print(f"[DEBUG] Supabase insert error for row {i}: {type(e).__name__}: {e}")
+                        with debug_box:
+                            st.write({"supabase_insert_error": {"row": int(i), "error": f"{type(e).__name__}: {e}"}})
 
                 with log_box:
                     st.write({
