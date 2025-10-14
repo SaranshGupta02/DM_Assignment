@@ -1,0 +1,6 @@
+streamlit 
+langchain 
+langchain-openai 
+langchain-google-genai 
+langchain-cerebras 
+pandas

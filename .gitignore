@@ -1,0 +1,9 @@
+# Ignore Python cache and virtual environments
+__pycache__/
+*.pyc
+venv/
+
+# Ignore specific files
+java_files_report.md
+java_postmortem-gpt-4o.csv
+postmortem_results.csv
