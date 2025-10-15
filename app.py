@@ -27,6 +27,16 @@ with st.sidebar:
     SUPABASE_URL = st.text_input("SUPABASE_URL", type="password")
     SUPABASE_KEY = st.text_input("SUPABASE_KEY", type="password")
     SUPABASE_TABLE = st.text_input("SUPABASE_TABLE_Name", value="postmortem_results")
+    st.warning("Free keys may only allow ~150 rows per session. If you hit limits, switch keys or upgrade.")
+    with st.expander("How to get API keys", expanded=False):
+        st.markdown(
+            (
+                "- **OpenAI**: Create an account and generate an API key in the dashboard → [OpenAI API Keys](https://platform.openai.com/api-keys)\n"
+                "- **Google Gemini**: Create a key in Google AI Studio → [Google AI Studio](https://aistudio.google.com)\n"
+                "- **Cerebras**: Request access and create a key → [Cerebras Model Studio](https://inference.cerebras.ai)\n\n"
+                "Keep your keys secret and rotate if rate limits are hit."
+            )
+        )
     st.header("💾 Output")
     AUTOSAVE_DIR_INPUT = st.text_input("Autosave folder", value=str(Path.cwd() / "results"))
     try:
@@ -43,7 +53,24 @@ st.subheader("📁 Upload Files")
 csv_file = st.file_uploader("Upload CSV file", type=["csv"])
 zip_file = st.file_uploader("Upload ZIP file (project source code)", type=["zip"])
 
+# Row selection for processing subset of CSV rows
+col_row1, col_row2 = st.columns(2)
+with col_row1:
+    START_ROW = st.number_input("Start row (inclusive)", min_value=0, value=0, step=1)
+with col_row2:
+    END_ROW = st.number_input("End row (exclusive, 0 = all)", min_value=0, value=0, step=1)
+
 # Supabase setup instructions and helper
+with st.expander("Why Supabase?", expanded=False):
+    st.markdown(
+        (
+            "Supabase is added so that results are saved row-by-row as they are created.\n\n"
+            "- **Persistence**: Your progress is stored continuously so you can resume later.\n"
+            "- **Reliability**: If a run stops (e.g., rate limit), completed rows are already saved.\n"
+            "- **Central access**: Results can be queried from a single table.\n\n"
+            "This is optional — leave credentials blank to skip saving to Supabase."
+        )
+    )
 with st.expander("Supabase setup and table schema", expanded=False):
     st.markdown(
         """
@@ -140,6 +167,21 @@ def _strip_wrapper_quotes(s: str) -> str:
         return s[1:-1].strip()
     return s
 
+def _is_rate_limit_message(msg: t.Optional[str]) -> bool:
+    """Heuristically detect rate limit / quota errors across providers."""
+    if not msg:
+        return False
+    m = str(msg).lower()
+    patterns = [
+        "rate limit",           # generic
+        "ratelimit",            # generic compact
+        "429",                  # http status
+        "quota exceeded",       # openai/generic
+        "resource_exhausted",   # google/gemini
+        "too many requests",    # generic
+    ]
+    return any(p in m for p in patterns)
+
 # ===========================
 # MAIN PROCESSING
 # ===========================
@@ -193,6 +235,12 @@ if csv_file and zip_file:
             try:
                 df_in = pd.read_csv(csv_path)
                 # df_in=df_in.iloc[:2,:]
+                # Apply row capping based on user inputs
+                _start = int(START_ROW) if START_ROW is not None else 0
+                _end = int(END_ROW) if END_ROW and int(END_ROW) > 0 else None
+                if _start != 0 or _end is not None:
+                    df_in = df_in.iloc[_start:_end, :]
+                    st.info(f"Processing row slice: iloc[{_start}:{_end if _end is not None else ''}, :]")
                 st.write("✅ CSV Loaded:", df_in.shape)
                 st.dataframe(df_in.head(3))
                 with debug_box:
@@ -298,9 +346,20 @@ if csv_file and zip_file:
                         if(CEREBRAS_API_KEY):
                             cerebras_res = fut_cerebras.result(timeout=60)
                     except Exception as e:
-                        openai_res = gemini_res = cerebras_res = f"[TIMEOUT] {e}"
+                        
                         with debug_box:
                             st.write({"model_timeout": f"{type(e).__name__}: {e}"})
+                # Detect rate limits and break early with logs
+                openai_rl = _is_rate_limit_message(locals().get("openai_res"))
+                gemini_rl = _is_rate_limit_message(locals().get("gemini_res"))
+                cerebras_rl = _is_rate_limit_message(locals().get("cerebras_res")) if CEREBRAS_API_KEY else False
+                if openai_rl or gemini_rl or cerebras_rl:
+                    which = [name for name, flag in [("OpenAI", openai_rl), ("Gemini", gemini_rl), ("Cerebras", cerebras_rl)] if flag]
+                    with log_box:
+                        st.error(f"Rate limit exceeded for: {', '.join(which)}. Halting further processing.")
+                    with debug_box:
+                        st.write({"rate_limit_exceeded": True, "providers": which, "row": int(i)})
+                    break
                 if(CEREBRAS_API_KEY):
                     results.append({
                         "csv_row": i,
