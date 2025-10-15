@@ -54,7 +54,16 @@ csv_file = st.file_uploader("Upload CSV file", type=["csv"])
 zip_file = st.file_uploader("Upload ZIP file (project source code)", type=["zip"])
 
 # Row selection for processing subset of CSV rows
+with st.expander("Why start row and end row", expanded=False):
+    st.markdown(
+        (
+            "So that you can resume from where the rate limit error occurs \n\n"
+            "Check in Supabase table how many rows are created than start from that row in a batch upto 150\n"
+    
+        )
+    )
 col_row1, col_row2 = st.columns(2)
+
 with col_row1:
     START_ROW = st.number_input("Start row (inclusive)", min_value=0, value=0, step=1)
 with col_row2:
