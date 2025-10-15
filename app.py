@@ -56,7 +56,7 @@ zip_file = st.file_uploader("Upload ZIP file (project source code)", type=["zip"
 with st.expander("Instruction",expanded=False):
     st.markdown(
         "- Upload your csv and zip File\n"
-        "- Edit your postmortem prompt (Note:In user prompt {code} is the placeholder for code present in sorce code file, need to keep it)\n"
+        "- Edit your postmortem prompt (Note:In user prompt {code} is the placeholder for code present in source code file, need to keep it)\n"
         "- Enter Starting and ending indices\n"
         "- RUN the app\n"
         "- You will get your data in supabase"
