@@ -368,11 +368,11 @@ if csv_file and zip_file:
                         with debug_box:
                             st.write({"model_timeout": f"{type(e).__name__}: {e}"})
                 # Detect rate limits and break early with logs
-                openai_rl = _is_rate_limit_message(locals().get("openai_res"))
+                #openai_rl = _is_rate_limit_message(locals().get("openai_res"))
                 gemini_rl = _is_rate_limit_message(locals().get("gemini_res"))
-                cerebras_rl = _is_rate_limit_message(locals().get("cerebras_res")) if CEREBRAS_API_KEY else False
-                if openai_rl or gemini_rl or cerebras_rl:
-                    which = [name for name, flag in [("OpenAI", openai_rl), ("Gemini", gemini_rl), ("Cerebras", cerebras_rl)] if flag]
+                #cerebras_rl = _is_rate_limit_message(locals().get("cerebras_res")) if CEREBRAS_API_KEY else False
+                if  gemini_rl :
+                    which = [name for name, flag in [("Gemini", gemini_rl)] if flag]
                     with log_box:
                         st.error(f"Rate limit exceeded for: {', '.join(which)}. Halting further processing.")
                     with debug_box:
