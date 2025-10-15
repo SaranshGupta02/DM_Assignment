@@ -48,11 +48,6 @@ with st.sidebar:
 # ===========================
 # FILE INPUTS
 # ===========================
-st.subheader("📁 Upload Files")
-
-csv_file = st.file_uploader("Upload CSV file", type=["csv"])
-zip_file = st.file_uploader("Upload ZIP file (project source code)", type=["zip"])
-
 with st.expander("Instruction",expanded=False):
     st.markdown(
         "- Upload your csv and zip File\n"
@@ -61,6 +56,13 @@ with st.expander("Instruction",expanded=False):
         "- RUN the app\n"
         "- You will get your data in supabase"
     )
+
+
+st.subheader("📁 Upload Files")
+
+csv_file = st.file_uploader("Upload CSV file", type=["csv"])
+zip_file = st.file_uploader("Upload ZIP file (project source code)", type=["zip"])
+
 
 # Row selection for processing subset of CSV rows
 with st.expander("Why start row and end row", expanded=False):
