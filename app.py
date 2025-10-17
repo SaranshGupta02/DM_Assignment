@@ -259,6 +259,8 @@ if csv_file and zip_file:
                 if _start != 0 or _end is not None:
                     df_in = df_in.iloc[_start:_end, :]
                     st.info(f"Processing row slice: iloc[{_start}:{_end if _end is not None else ''}, :]")
+                    df_in = df_in.reset_index(drop=True)
+                    total = len(df_in)
                 st.write("✅ CSV Loaded:", df_in.shape)
                 st.dataframe(df_in.head(3))
                 with debug_box:
