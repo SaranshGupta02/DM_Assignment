@@ -239,6 +239,8 @@ if csv_file and zip_file:
                 if _start != 0 or _end is not None:
                     df_in = df_in.iloc[_start:_end, :]
                     st.info(f"Processing row slice: iloc[{_start}:{_end if _end is not None else ''}, :]")
+                # Reset index after slicing to ensure progress calculation works correctly
+                df_in = df_in.reset_index(drop=True)
                 st.write("✅ CSV Loaded:", df_in.shape)
                 st.dataframe(df_in.head(3))
                 with debug_box:
@@ -280,7 +282,7 @@ if csv_file and zip_file:
             total = len(df_in)
             log_box = st.expander("Row creation logs", expanded=True)
 
-            for i, row in df_in.iterrows():
+            for idx, (i, row) in enumerate(df_in.iterrows()):
                 
                 raw_path = row[col]
                 file_path = resolve_path(raw_path, DEST,csv_file.name)
@@ -375,7 +377,9 @@ if csv_file and zip_file:
                         "gemini_len": None if gemini_res is None else len(str(gemini_res)),
                     })
 
-                progress.progress((i + 1) / total)
+                # Use enumerate index for progress to ensure it stays within [0.0, 1.0]
+                progress_value = min((idx + 1) / total, 1.0)
+                progress.progress(progress_value)
 
                 # Periodic autosave every 10 completed results
                 if len(results) > 0 and len(results) % 10 == 0:
