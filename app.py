@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import zipfile, os, tempfile, textwrap, traceback
 from pathlib import Path
-import concurrent.futures
 import typing as t
 from supabase import create_client
 
@@ -19,10 +18,7 @@ st.caption("Upload your project and CSV, enter API keys, and generate AI-driven 
 # ===========================
 with st.sidebar:
     st.header("🔑 API Keys")
-    OPENAI_API_KEY = st.text_input("OpenAI API Key", type="password")
     GEMINI_API_KEY = st.text_input("Gemini API Key", type="password")
-    CEREBRAS_API_KEY = st.text_input("Cerebras API Key", type="password")
-    OPENAI_MODEL = st.selectbox("OpenAI model", ["gpt-4o-mini", "gpt-4o", "o4-mini", "o3-mini"], index=1)
     GEMINI_MODEL = st.selectbox("Gemini model", ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"], index=0)
     SUPABASE_URL = st.text_input("SUPABASE_URL", type="password")
     SUPABASE_KEY = st.text_input("SUPABASE_KEY", type="password")
@@ -31,9 +27,7 @@ with st.sidebar:
     with st.expander("How to get API keys", expanded=False):
         st.markdown(
             (
-                "- **OpenAI**: Create an account and generate an API key in the dashboard → [OpenAI API Keys](https://platform.openai.com/api-keys)\n"
-                "- **Google Gemini**: Create a key in Google AI Studio → [Google AI Studio](https://aistudio.google.com)\n"
-                "- **Cerebras**: Request access and create a key → [Cerebras Model Studio](https://inference.cerebras.ai)\n\n"
+                "- **Google Gemini**: Create a key in Google AI Studio → [Google AI Studio](https://aistudio.google.com)\n\n"
                 "Keep your keys secret and rotate if rate limits are hit."
             )
         )
@@ -53,42 +47,14 @@ st.subheader("📁 Upload Files")
 csv_file = st.file_uploader("Upload CSV file", type=["csv"])
 zip_file = st.file_uploader("Upload ZIP file (project source code)", type=["zip"])
 
-with st.expander("Instruction",expanded=False):
-    st.markdown(
-        "- Upload your csv and zip File\n"
-        "- Edit your postmortem prompt (Note:In user prompt {code} is the placeholder for code present in source code file, need to keep it)\n"
-        "- Enter Starting and ending indices\n"
-        "- RUN the app\n"
-        "- You will get your data in supabase"
-    )
-
 # Row selection for processing subset of CSV rows
-with st.expander("Why start row and end row", expanded=False):
-    st.markdown(
-        (
-            "So that you can resume from where the rate limit error occurs \n\n"
-            "Check in Supabase table how many rows are created than start from that row in a batch upto 150\n"
-    
-        )
-    )
 col_row1, col_row2 = st.columns(2)
-
 with col_row1:
     START_ROW = st.number_input("Start row (inclusive)", min_value=0, value=0, step=1)
 with col_row2:
     END_ROW = st.number_input("End row (exclusive, 0 = all)", min_value=0, value=0, step=1)
 
 # Supabase setup instructions and helper
-with st.expander("Why Supabase?", expanded=False):
-    st.markdown(
-        (
-            "Supabase is added so that results are saved row-by-row as they are created.\n\n"
-            "- **Persistence**: Your progress is stored continuously so you can resume later.\n"
-            "- **Reliability**: If a run stops (e.g., rate limit), completed rows are already saved.\n"
-            "- **Central access**: Results can be queried from a single table.\n\n"
-            "This is optional — leave credentials blank to skip saving to Supabase."
-        )
-    )
 with st.expander("Supabase setup and table schema", expanded=False):
     st.markdown(
         """
@@ -103,32 +69,46 @@ with st.expander("Supabase setup and table schema", expanded=False):
           csv_row bigint,
           csv_path_value text,
           resolved_path text,
-          openai text,
-          gemini text,
-          cerebras text
+          gemini text
         );
         ```
         """
     )
 
 # ===========================
-# SYSTEM PROMPT
+# FIXED PROMPT TEMPLATE
 # ===========================
-SYSTEM_PROMPT = st.text_area(
-    "🧩 System Prompt",
-    value="Focus on correctness, performance, and security. Provide a concise, structured audit.",
-    height=120,
-)
+USER_PROMPT_TEMPLATE = """You are given a source code file. Your task is to generate a Postmortem Analysis Report following the structure below. The report must be written entirely in professional paragraph form, without bullet points or numbered lists. Maintain a technical, objective, and concise tone throughout.
 
-# Allow user to customize the per-file user prompt template
-USER_PROMPT_TEMPLATE = st.text_area(
-    "🗣️ User Prompt Template",
-    value=(
-        "You are given a source code file. Analyze it thoroughly and write a single, detailed postmortem report.\n"
-        "source code:\n{code}\n"
-    ),
-    height=200,
-)
+FILE_PATH: {file_path}
+
+--- BEGIN SOURCE CODE ---
+
+{code}
+
+--- END SOURCE CODE ---
+
+If the file is missing, clearly state that the file was not found and no analysis can be performed.
+
+If the file is present, perform a complete and detailed postmortem analysis of the code and provide the following sections written in cohesive paragraphs:
+
+Overview: Explain what the code does, its programming language, and its main purpose.
+
+Code Quality: Discuss the readability, structure, style, and adherence to standard best practices. Mention whether the naming conventions, indentation, and logical flow are consistent and clear.
+
+Logic and Functional Analysis: Describe the logical soundness of the implementation. Identify any functional errors, redundant computations, or misleading assumptions. Explain how the logic behaves under typical and edge cases.
+
+Performance Analysis: Examine computational efficiency, resource usage, and scalability. Highlight potential bottlenecks such as nested loops, repeated computations, or inefficient data structures, and suggest possible improvements.
+
+Security Analysis: Assess the presence of security vulnerabilities including unsafe user input handling, injection risks, insecure file or database access, and exposed credentials. Discuss how well the code mitigates these risks.
+
+Error Handling and Robustness: Evaluate the code's ability to handle exceptions and invalid inputs gracefully. Mention whether there are sufficient safeguards to prevent unexpected crashes or undefined behavior.
+
+Maintainability and Scalability: Analyze the modularity, extensibility, and long-term maintainability of the code. Comment on whether it is easily adaptable to future changes or increasing data volumes.
+
+Critical Issues Summary: Present a short paragraph summarizing the major issues discovered, their relative severity (low, medium, high, or critical), and general recommendations for correction.
+
+Final Verdict: Conclude with a professional statement summarizing the overall reliability, safety, and production readiness of the code, ending with one of three ratings —   Safe,   Needs Fixes, or   Critical Problems Found — followed by a concise justification."""
 
 # ===========================
 # HELPER FUNCTIONS
@@ -259,8 +239,6 @@ if csv_file and zip_file:
                 if _start != 0 or _end is not None:
                     df_in = df_in.iloc[_start:_end, :]
                     st.info(f"Processing row slice: iloc[{_start}:{_end if _end is not None else ''}, :]")
-                    df_in = df_in.reset_index(drop=True)
-                    total = len(df_in)
                 st.write("✅ CSV Loaded:", df_in.shape)
                 st.dataframe(df_in.head(3))
                 with debug_box:
@@ -275,26 +253,16 @@ if csv_file and zip_file:
             with debug_box:
                 st.write({"detected_path_column": col})
 
-            from langchain_openai import ChatOpenAI
             from langchain_google_genai import ChatGoogleGenerativeAI
-            from langchain_cerebras.chat_models import ChatCerebras
-            from langchain.schema import SystemMessage, HumanMessage
+            from langchain.schema import HumanMessage
 
-            llm_openai = ChatOpenAI(model=OPENAI_MODEL, temperature=0.2, openai_api_key=OPENAI_API_KEY)
             llm_gemini = ChatGoogleGenerativeAI(model=GEMINI_MODEL, temperature=0.2, api_key=GEMINI_API_KEY)
-            if(CEREBRAS_API_KEY):
-                llm_cerebras = ChatCerebras(model="llama3.1-70b", api_key=CEREBRAS_API_KEY, temperature=0.2)
             with debug_box:
                 st.write({
                     "api_keys": {
-                        "openai_provided": bool(OPENAI_API_KEY),
                         "gemini_provided": bool(GEMINI_API_KEY),
-                        "cerebras_provided": bool(CEREBRAS_API_KEY),
                     },
-                    "models": [
-                        "gpt-4o",
-                        "gemini-2.0-flash",
-                    ] + (["llama3.1-70b"] if CEREBRAS_API_KEY else []),
+                    "models": [GEMINI_MODEL],
                 })
 
             results = []
@@ -332,71 +300,48 @@ if csv_file and zip_file:
                     continue
 
                 file_text = read_text_safe(file_path)
-                if "{code}" in USER_PROMPT_TEMPLATE:
-                    user_prompt = USER_PROMPT_TEMPLATE.replace("{code}", file_text)
-                else:
-                    user_prompt = f"{USER_PROMPT_TEMPLATE}\n\n{file_text}"
+                file_path_str = str(file_path) if found else "[NOT FOUND]"
+                user_prompt = USER_PROMPT_TEMPLATE.replace("{file_path}", file_path_str).replace("{code}", file_text)
                 with debug_box:
                     st.write({
                         "row_index": i,
                         "resolved_path": str(file_path),
                         "file_text_length": len(file_text),
-                        "prompt_uses_placeholder": "{code}" in USER_PROMPT_TEMPLATE,
                         "user_prompt_length": len(user_prompt),
                     })
 
-                def call_model(fn, llm, sys, usr):
+                def call_model(llm, usr):
                     try:
-                        resp = llm.invoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+                        resp = llm.invoke([HumanMessage(content=usr)])
                         return _strip_wrapper_quotes(resp.content)
                     except Exception as e:
                         return f"[ERROR] {type(e).__name__}: {e}"
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                with debug_box:
+                    st.write({"calling_model_for_row": i})
+                
+                try:
+                    gemini_res = call_model(llm_gemini, user_prompt)
+                except Exception as e:
+                    gemini_res = f"[ERROR] {type(e).__name__}: {e}"
                     with debug_box:
-                        st.write({"calling_models_for_row": i})
-                    fut_openai = executor.submit(call_model, "openai", llm_openai, SYSTEM_PROMPT, user_prompt)
-                    fut_gemini = executor.submit(call_model, "gemini", llm_gemini, SYSTEM_PROMPT, user_prompt)
-                    if(CEREBRAS_API_KEY):
-                        fut_cerebras = executor.submit(call_model, "cerebras", llm_cerebras, SYSTEM_PROMPT, user_prompt)
-
-                    try:
-                        openai_res = fut_openai.result(timeout=60)
-                        gemini_res = fut_gemini.result(timeout=60)
-                        if(CEREBRAS_API_KEY):
-                            cerebras_res = fut_cerebras.result(timeout=60)
-                    except Exception as e:
-                        
-                        with debug_box:
-                            st.write({"model_timeout": f"{type(e).__name__}: {e}"})
+                        st.write({"model_error": f"{type(e).__name__}: {e}"})
+                
                 # Detect rate limits and break early with logs
-                openai_rl = _is_rate_limit_message(locals().get("openai_res"))
-                gemini_rl = _is_rate_limit_message(locals().get("gemini_res"))
-                cerebras_rl = _is_rate_limit_message(locals().get("cerebras_res")) if CEREBRAS_API_KEY else False
+                gemini_rl = _is_rate_limit_message(gemini_res)
                 if gemini_rl:
-                    which = [name for name, flag in [("Gemini", gemini_rl)] if flag]
                     with log_box:
-                        st.error(f"Rate limit exceeded for: {', '.join(which)}. Halting further processing.")
+                        st.error(f"Rate limit exceeded for Gemini. Halting further processing.")
                     with debug_box:
-                        st.write({"rate_limit_exceeded": True, "providers": which, "row": int(i)})
+                        st.write({"rate_limit_exceeded": True, "provider": "Gemini", "row": int(i)})
                     break
-                if(CEREBRAS_API_KEY):
-                    results.append({
-                        "csv_row": i,
-                        "csv_path_value": raw_path,
-                        "resolved_path": str(file_path),
-                        "openai": openai_res,
-                        "gemini": gemini_res,
-                        "cerebras": cerebras_res,
-                    })
-                else:
-                    results.append({
-                        "csv_row": i,
-                        "csv_path_value": raw_path,
-                        "resolved_path": str(file_path),
-                        "openai": openai_res,
-                        "gemini": gemini_res,
-                    })
+                
+                results.append({
+                    "csv_row": i,
+                    "csv_path_value": raw_path,
+                    "resolved_path": str(file_path),
+                    "gemini": gemini_res,
+                })
 
                 # Insert into Supabase per row if configured
                 if supabase_client is not None and SUPABASE_TABLE:
@@ -405,11 +350,8 @@ if csv_file and zip_file:
                             "csv_row": int(i),
                             "csv_path_value": str(raw_path),
                             "resolved_path": str(file_path),
-                            "openai": str(openai_res) if openai_res is not None else None,
                             "gemini": str(gemini_res) if gemini_res is not None else None,
                         }
-                        if 'cerebras_res' in locals():
-                            payload["cerebras"] = str(cerebras_res) if cerebras_res is not None else None
                         _ = supabase_client.table(SUPABASE_TABLE).insert(payload).execute()
                         print(f"[DEBUG] Supabase row inserted: {payload['csv_row']}")
                         with debug_box:
@@ -430,9 +372,7 @@ if csv_file and zip_file:
                     st.write({
                         "row_completed": i,
                         "results_count": len(results),
-                        "openai_len": None if openai_res is None else len(str(openai_res)),
                         "gemini_len": None if gemini_res is None else len(str(gemini_res)),
-                        **({"cerebras_len": (None if not CEREBRAS_API_KEY else (None if cerebras_res is None else len(str(cerebras_res))))}),
                     })
 
                 progress.progress((i + 1) / total)
@@ -490,4 +430,4 @@ if csv_file and zip_file:
                     st.write({"csv_out_stat_error": f"{type(e).__name__}: {e}"})
 
 else:
-    st.warning("Please provide all API keys and upload both CSV and ZIP files to proceed.")
+    st.warning("Please provide Gemini API key and upload both CSV and ZIP files to proceed.")
