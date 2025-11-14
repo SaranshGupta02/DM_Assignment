@@ -254,7 +254,7 @@ if csv_file and zip_file:
                 st.write({"detected_path_column": col})
 
             from langchain_google_genai import ChatGoogleGenerativeAI
-            from langchain.schema import HumanMessage
+            from langchain_core.messages import HumanMessage
 
             llm_gemini = ChatGoogleGenerativeAI(model=GEMINI_MODEL, temperature=0.2, api_key=GEMINI_API_KEY)
             with debug_box:
